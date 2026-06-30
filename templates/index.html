@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+</head>
+
+<body class="bg-gray-900 text-white min-h-screen p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <header class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-indigo-500">Playlist Downloader</h1>
+            <p class="text-gray-400 mt-2">Cached & Session-Persistent Queue Downloader</p>
+        </header>
+
+        <div id="queueWidget" class="hidden bg-indigo-950 border border-indigo-500/30 p-4 rounded-xl mb-6 shadow-lg">
+            <div class="flex items-center justify-between mb-2">
+                <span class="font-bold text-indigo-400 flex items-center gap-2">
+                    <span id="pingDot" class="animate-ping rounded-full h-2 w-2 bg-indigo-400 inline-block"></span>
+                    <span id="widgetTitle">Backend Queue Processing</span>
+                </span>
+                <span id="queueCount" class="text-sm font-semibold text-gray-300">0 / 0 Items</span>
+            </div>
+            <p id="queueCurrent" class="text-xs text-gray-400 truncate mb-1">Processing: None</p>
+            <div class="w-full bg-gray-800 rounded-full h-2">
+                <div id="queueBar" class="bg-indigo-500 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-xl shadow-lg mb-8 space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-400 mb-1">Local PC Directory Path</label>
+                <input type="text" id="downloadPath" placeholder="e.g., C:/Users/Name/Music/Downloads" 
+                    class="w-full p-3 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-indigo-500 text-sm">
+            </div>
+            <div class="flex flex-col md:flex-row gap-4">
+                <input type="text" id="playlistUrl" placeholder="https://..."
+                    class="flex-1 p-3 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-indigo-500">
+                <select id="platform" class="p-3 rounded bg-gray-700 border border-gray-600">
+                    <option value="youtube">YouTube</option>
+                    <option value="spotify">Spotify (No-API Mode)</option>
+                </select>
+                <button onclick="fetchPlaylist()" id="fetchBtn" class="bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded font-semibold transition">
+                    Fetch Tracks
+                </button>
+            </div>
+        </div>
+
+        <div id="loader" class="hidden text-center py-10">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto"></div>
+            <p class="mt-4 text-gray-400">Extracting tracks...</p>
+        </div>
+
+        <div id="resultsContainer" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold text-gray-300">Tracks Found</h2>
+                <button onclick="addSelectedToQueue()" id="queueBtn" class="bg-green-600 hover:bg-green-700 px-5 py-2.5 rounded font-semibold transition text-sm">
+                    Send All Selected to Queue
+                </button>
+            </div>
+            <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg">
+                <table class="w-full text-left">
+                    <thead class="bg-gray-700 text-gray-300">
+                        <tr>
+                            <th class="p-4 w-12 text-center">
+                                <input type="checkbox" id="selectAll" checked onclick="toggleSelectAll(this)" class="w-4 h-4 rounded accent-indigo-500">
+                            </th>
+                            <th class="p-4">Track Title</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trackList" class="divide-y divide-gray-700"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let fetchedTracks = [];
+        let pollInterval = null;
+
+        // Automatically run on page load to catch accidental refreshes
+        window.addEventListener('DOMContentLoaded', () => {
+            checkActiveBackendQueue();
+        });
+
+        async function checkActiveBackendQueue() {
+            try {
+                const response = await axios.get('/queue-status');
+                if (response.data.active || response.data.remaining > 0) {
+                    startStatusPolling();
+                }
+            } catch (e) {
+                console.error("Could not check initial queue status context on window refresh.", e);
+            }
+        }
+
+        async function fetchPlaylist() {
+            const url = document.getElementById('playlistUrl').value;
+            const platform = document.getElementById('platform').value;
+            if (!url) return alert("Please enter a URL");
+
+            document.getElementById('trackList').innerHTML = '';
+            document.getElementById('loader').classList.remove('hidden');
+            document.getElementById('resultsContainer').classList.add('hidden');
+
+            try {
+                const response = await axios.post('/fetch-playlist', { url, platform });
+                document.getElementById('loader').classList.add('hidden');
+
+                if (response.data.success) {
+                    fetchedTracks = response.data.tracks;
+                    document.getElementById('resultsContainer').classList.remove('hidden');
+                    
+                    fetchedTracks.forEach((track, index) => {
+                        document.getElementById('trackList').innerHTML += `
+                            <tr class="hover:bg-gray-750 transition">
+                                <td class="p-4 text-center">
+                                    <input type="checkbox" data-index="${index}" checked class="track-checkbox w-4 h-4 rounded accent-indigo-500">
+                                </td>
+                                <td class="p-4">${track.title}</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    alert("Error parsing playlist: " + response.data.error);
+                }
+            } catch (err) {
+                document.getElementById('loader').classList.add('hidden');
+                alert("Failed to read external metadata payload source.");
+            }
+        }
+
+        function toggleSelectAll(master) {
+            document.querySelectorAll('.track-checkbox').forEach(cb => cb.checked = master.checked);
+        }
+
+        async function addSelectedToQueue() {
+            const path = document.getElementById('downloadPath').value;
+            if (!path) return alert("Please type your absolute save folder destination.");
+
+            const checkboxes = document.querySelectorAll('.track-checkbox:checked');
+            if (checkboxes.length === 0) return alert("No tracks selected.");
+
+            const tracksToQueue = [];
+            checkboxes.forEach(cb => {
+                tracksToQueue.push(fetchedTracks[cb.getAttribute('data-index')]);
+            });
+
+            try {
+                const response = await axios.post('/add-to-queue', { tracks: tracksToQueue, save_path: path });
+                if (response.data.success) {
+                    startStatusPolling();
+                } else {
+                    alert("Failed to push batch collection to queue: " + response.data.error);
+                }
+            } catch (err) {
+                alert("Error sending tracking lists payload down to backend engine pipeline.");
+            }
+        }
+
+        function startStatusPolling() {
+            document.getElementById('queueWidget').classList.remove('hidden');
+            document.getElementById('pingDot').classList.add('animate-ping');
+            document.getElementById('widgetTitle').innerText = "Backend Queue Processing";
+            
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await axios.get('/queue-status');
+                    const status = response.data;
+                    
+                    const processedCount = status.completed + status.failed + status.skipped;
+                    document.getElementById('queueCount').innerText = `${processedCount} / ${status.total} Items (Skipped: ${status.skipped})`;
+                    document.getElementById('queueCurrent').innerText = `Active Operation: ${status.current_item}`;
+                    
+                    const percent = status.total > 0 ? (processedCount / status.total) * 100 : 0;
+                    document.getElementById('queueBar').style.width = `${percent}%`;
+
+                    if (!status.active && status.remaining === 0) {
+                        clearInterval(pollInterval);
+                        document.getElementById('queueCurrent').innerText = "All backend operations wrapped up successfully.";
+                        document.getElementById('pingDot').classList.remove('animate-ping');
+                        document.getElementById('widgetTitle').innerText = "Queue Task Idle / Completed";
+                        alert("The background download queue has finished your entire request batch!");
+                    }
+                } catch (e) {
+                    console.error("Failed structural progress poll update loop iteration.", e);
+                }
+            }, 1500);
+        }
+    </script>
+</body>
+
+</html>
